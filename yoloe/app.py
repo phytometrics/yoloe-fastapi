@@ -14,6 +14,8 @@ from ultralytics.utils.torch_utils import smart_inference_mode
 from huggingface_hub import hf_hub_download
 import traceback
 
+from typing import List, Dict, Any
+
 app = FastAPI(
     title="YOLOE API",
     description="YOLOE: Real-Time Seeing Anything API",
@@ -46,6 +48,7 @@ def extract_detections(results, model):
     detections = sv.Detections.from_ultralytics(results[0])
     output = []
     for class_id, confidence, bbox in zip(detections.class_id, detections.confidence, detections.xyxy):
+        print(f"Class ID: {class_id}, Confidence: {confidence}, BBox: {bbox}")
         output.append({
             "class_name": model.names[int(class_id)],
             "confidence": float(confidence),
@@ -53,10 +56,31 @@ def extract_detections(results, model):
         })
     return output, detections
 
+def detections_to_dict(detections: sv.Detections) -> List[Dict[str, Any]]:
+    results = []
+    for i in range(len(detections)):
+        detection = {
+            "box": detections.xyxy[i].tolist(),  # Convert NumPy array to list
+            "confidence": float(detections.confidence[i]) if detections.confidence is not None else None,
+            "class_id": int(detections.class_id[i]) if detections.class_id is not None else None,
+            "tracker_id": int(detections.tracker_id[i]) if detections.tracker_id is not None else None,
+        }
+        # Include additional data if present
+        for key, value in detections.data.items():
+            detection[key] = value[i].tolist() if isinstance(value[i], np.ndarray) else value[i]
+        results.append(detection)
+    return results
+
 def create_image_response(image):
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format='PNG')
     img_byte_arr.seek(0)
+    # include output and image
+    # response_content = {
+    #     "detections": output,
+    #     "image": base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+    # }
+    # return JSONResponse(content=response_content)
     return StreamingResponse(content=img_byte_arr, media_type="image/png")
 
 def annotate_image(image, detections):
@@ -75,27 +99,44 @@ def annotate_image(image, detections):
     return annotated
 
 @app.post("/api/predict/text")
-async def predict_text(
-    image: UploadFile = File(...),
+async def predict_text_multi(
+    images: List[UploadFile] = File(...),
     texts: str = Form(...),
-    model_id: str = Form("yoloe-v8l"),
+    model_id: str = Form("yoloe-11l"),
     image_size: int = Form(640),
     conf_thresh: float = Form(0.25),
     iou_thresh: float = Form(0.70),
     return_image: bool = Form(True)
 ):
     try:
-        contents = await image.read()
-        pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
         text_list = [t.strip() for t in texts.split(",")]
         model = init_model(model_id)
         model.set_classes(text_list, model.get_text_pe(text_list))
-        results = model.predict(source=pil_image, imgsz=image_size, conf=conf_thresh, iou=iou_thresh)
-        output, detections = extract_detections(results, model)
-        if return_image:
-            annotated = annotate_image(pil_image, detections)
-            return create_image_response(annotated)
-        return JSONResponse(content={"detections": output})
+
+        results_list = []
+
+        for image in images:
+            contents = await image.read()
+            pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
+            results = model.predict(source=pil_image, imgsz=image_size, conf=conf_thresh, iou=iou_thresh)
+            detections = sv.Detections.from_ultralytics(results[0])
+
+            item = {
+                "filename": image.filename,
+                "detections": detections_to_dict(detections),
+            }
+
+            if return_image:
+                annotated = annotate_image(pil_image, detections)
+                img_byte_arr = io.BytesIO()
+                annotated.save(img_byte_arr, format='PNG')
+                img_byte_arr.seek(0)
+                item["image_base64"] = base64.b64encode(img_byte_arr.read()).decode('utf-8')
+
+            results_list.append(item)
+
+        return JSONResponse(content={"results": results_list})
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
