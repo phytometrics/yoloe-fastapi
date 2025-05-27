@@ -22,6 +22,7 @@ RUN python download.py
 COPY ./yoloe /app/yoloe
 RUN pip install -e .
 
-
+# FastAPIアプリケーションを実行するためのポートを公開
+EXPOSE 8000
 # FastAPIサーバーを起動するコマンド
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

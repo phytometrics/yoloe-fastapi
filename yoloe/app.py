@@ -107,7 +107,7 @@ async def predict_text_multi(
     conf_thresh: float = Form(0.25),
     iou_thresh: float = Form(0.70),
     return_image: bool = Form(True)
-):
+) -> JSONResponse:
     try:
         text_list = [t.strip() for t in texts.split(",")]
         model = init_model(model_id)
@@ -140,89 +140,89 @@ async def predict_text_multi(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/predict/visual")
-async def predict_visual(
-    image: UploadFile = File(...),
-    visual_prompt_type: str = Form(...),
-    visual_usage_type: str = Form("Intra-Image"),
-    model_id: str = Form("yoloe-v8l"),
-    image_size: int = Form(640),
-    conf_thresh: float = Form(0.25),
-    iou_thresh: float = Form(0.70),
-    bboxes: str = Form(None),
-    target_image_base64: str = Form(None),
-    mask_image: UploadFile = File(None),
-    return_image: bool = Form(True)
-):
-    try:
-        contents = await image.read()
-        pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
-        target_image = None
-        if visual_usage_type == "Cross-Image" and target_image_base64:
-            target_image_data = base64.b64decode(target_image_base64)
-            target_image = Image.open(io.BytesIO(target_image_data)).convert("RGB")
-        prompts = {}
-        if visual_prompt_type == "bboxes" and bboxes:
-            bbox_list = np.array(eval(bboxes))
-            prompts = {"bboxes": bbox_list, "cls": np.zeros(len(bbox_list), dtype=int)}
-        elif visual_prompt_type == "masks" and mask_image:
-            mask_contents = await mask_image.read()
-            mask = Image.open(io.BytesIO(mask_contents)).convert("L")
-            mask_array = binary_fill_holes(np.array(mask)).astype(np.uint8)
-            mask_array[mask_array > 0] = 1
-            if mask_array.sum() == 0:
-                raise HTTPException(status_code=400, detail="Empty mask image.")
-            prompts = {"masks": mask_array[None], "cls": np.array([0])}
-        else:
-            raise HTTPException(status_code=400, detail="Invalid prompt setup.")
-        model = init_model(model_id)
-        kwargs = dict(prompts=prompts, predictor=YOLOEVPSegPredictor)
-        if target_image:
-            model.predict(source=pil_image, imgsz=image_size, conf=conf_thresh, iou=iou_thresh, return_vpe=True, **kwargs)
-            model.set_classes(["object0"], model.predictor.vpe)
-            model.predictor = None
-            pil_image = target_image
-            kwargs = {}
-        results = model.predict(source=pil_image, imgsz=image_size, conf=conf_thresh, iou=iou_thresh, **kwargs)
-        output, detections = extract_detections(results, model)
-        if return_image:
-            annotated = annotate_image(pil_image, detections)
-            return create_image_response(annotated)
-        return JSONResponse(content={"detections": output})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.post("/api/predict/visual")
+# async def predict_visual(
+#     image: UploadFile = File(...),
+#     visual_prompt_type: str = Form(...),
+#     visual_usage_type: str = Form("Intra-Image"),
+#     model_id: str = Form("yoloe-v8l"),
+#     image_size: int = Form(640),
+#     conf_thresh: float = Form(0.25),
+#     iou_thresh: float = Form(0.70),
+#     bboxes: str = Form(None),
+#     target_image_base64: str = Form(None),
+#     mask_image: UploadFile = File(None),
+#     return_image: bool = Form(True)
+# ):
+#     try:
+#         contents = await image.read()
+#         pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
+#         target_image = None
+#         if visual_usage_type == "Cross-Image" and target_image_base64:
+#             target_image_data = base64.b64decode(target_image_base64)
+#             target_image = Image.open(io.BytesIO(target_image_data)).convert("RGB")
+#         prompts = {}
+#         if visual_prompt_type == "bboxes" and bboxes:
+#             bbox_list = np.array(eval(bboxes))
+#             prompts = {"bboxes": bbox_list, "cls": np.zeros(len(bbox_list), dtype=int)}
+#         elif visual_prompt_type == "masks" and mask_image:
+#             mask_contents = await mask_image.read()
+#             mask = Image.open(io.BytesIO(mask_contents)).convert("L")
+#             mask_array = binary_fill_holes(np.array(mask)).astype(np.uint8)
+#             mask_array[mask_array > 0] = 1
+#             if mask_array.sum() == 0:
+#                 raise HTTPException(status_code=400, detail="Empty mask image.")
+#             prompts = {"masks": mask_array[None], "cls": np.array([0])}
+#         else:
+#             raise HTTPException(status_code=400, detail="Invalid prompt setup.")
+#         model = init_model(model_id)
+#         kwargs = dict(prompts=prompts, predictor=YOLOEVPSegPredictor)
+#         if target_image:
+#             model.predict(source=pil_image, imgsz=image_size, conf=conf_thresh, iou=iou_thresh, return_vpe=True, **kwargs)
+#             model.set_classes(["object0"], model.predictor.vpe)
+#             model.predictor = None
+#             pil_image = target_image
+#             kwargs = {}
+#         results = model.predict(source=pil_image, imgsz=image_size, conf=conf_thresh, iou=iou_thresh, **kwargs)
+#         output, detections = extract_detections(results, model)
+#         if return_image:
+#             annotated = annotate_image(pil_image, detections)
+#             return create_image_response(annotated)
+#         return JSONResponse(content={"detections": output})
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/predict/prompt-free")
-async def predict_prompt_free(
-    image: UploadFile = File(...),
-    model_id: str = Form("yoloe-v8l"),
-    image_size: int = Form(640),
-    conf_thresh: float = Form(0.25),
-    iou_thresh: float = Form(0.70),
-    return_image: bool = Form(True)
-):
-    try:
-        contents = await image.read()
-        pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
-        with open('tools/ram_tag_list.txt', 'r') as f:
-            texts = [x.strip() for x in f.readlines()]
-        prompts = { "texts": texts }
-        model = init_model(model_id, is_pf=True)
-        vocab = model.get_vocab(texts)
-        model.set_vocab(vocab, names=texts)
+# @app.post("/api/predict/prompt-free")
+# async def predict_prompt_free(
+#     image: UploadFile = File(...),
+#     model_id: str = Form("yoloe-v8l"),
+#     image_size: int = Form(640),
+#     conf_thresh: float = Form(0.25),
+#     iou_thresh: float = Form(0.70),
+#     return_image: bool = Form(True)
+# ):
+#     try:
+#         contents = await image.read()
+#         pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
+#         with open('tools/ram_tag_list.txt', 'r') as f:
+#             texts = [x.strip() for x in f.readlines()]
+#         prompts = { "texts": texts }
+#         model = init_model(model_id, is_pf=True)
+#         vocab = model.get_vocab(texts)
+#         model.set_vocab(vocab, names=texts)
 
-        model.model.model[-1].conf = 0.001
-        model.model.model[-1].max_det = 1000
-        model.model.model[-1].is_fused = True
-        results = model.predict(source=pil_image, imgsz=image_size, conf=conf_thresh, iou=iou_thresh)
-        output, detections = extract_detections(results, model)
-        if return_image:
-            annotated = annotate_image(pil_image, detections)
-            return create_image_response(annotated)
-        return JSONResponse(content={"detections": output})
-    except Exception as e:
-        traceback.print_exc()  # ← これでコンソールにスタックトレースが出る
-        raise HTTPException(status_code=500, detail=str(e))
+#         model.model.model[-1].conf = 0.001
+#         model.model.model[-1].max_det = 1000
+#         model.model.model[-1].is_fused = True
+#         results = model.predict(source=pil_image, imgsz=image_size, conf=conf_thresh, iou=iou_thresh)
+#         output, detections = extract_detections(results, model)
+#         if return_image:
+#             annotated = annotate_image(pil_image, detections)
+#             return create_image_response(annotated)
+#         return JSONResponse(content={"detections": output})
+#     except Exception as e:
+#         traceback.print_exc()  # ← これでコンソールにスタックトレースが出る
+#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/models")
 async def get_models():
